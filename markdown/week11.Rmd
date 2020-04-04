@@ -1,0 +1,130 @@
+---
+title: "week11"
+author: "Dana Tomeh"
+date: "4/2/2020"
+output: word_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Libraries 
+```{r, message=FALSE}
+library(tidyverse)
+library(caret)
+library(foreign)
+library(haven)
+library(glmnet)
+library(xgboost)
+```
+
+# Data Import and Cleaning
+```{r}
+week11 <- read_sav("../data/GSS2006.sav")
+week11_tbl <-as_tibble(week11) %>% 
+  select(HEALTH, BIG5A1, BIG5B1, BIG5C1, BIG5D1, BIG5E1, BIG5A2, BIG5B2, BIG5C2, BIG5D2, BIG5E2) %>%
+  mutate(HEALTH=as.numeric(HEALTH),
+         BIG5A1=as.numeric(BIG5A1), 
+        BIG5B1=as.numeric(BIG5B1),
+        BIG5C1=as.numeric(BIG5C1),
+        BIG5D1=as.numeric(BIG5D1),
+        BIG5E1=as.numeric(BIG5E1),
+        BIG5A2=as.numeric(BIG5A2), 
+        BIG5B2=as.numeric(BIG5B2),
+        BIG5C2=as.numeric(BIG5C2),
+        BIG5D2=as.numeric(BIG5D2),
+        BIG5E2=as.numeric(BIG5E2))
+```
+
+#Analysis 
+
+```{r}
+set.seed(2020)
+rows <- sample(nrow(week11_tbl))
+shuffled <- week11_tbl[rows,]
+holdout <- shuffled[1:250,]
+mod_dat <- shuffled[251:4510,]
+
+
+#Running Model 1, the simple linear regression model with number of folds k=10
+
+
+#### THIS IS WRONG. SUPPOSED TO BE na.pass but im getting an error so i dunno what to do here.
+
+lm_mod <- train(
+ HEALTH ~ ., 
+ mod_dat, 
+ method="lm",
+ preProcess=c("center", "scale", "zv", "medianImpute"), 
+ trControl= trainControl(method="cv", number = 10, verboseIter = T), 
+ na.action = na.omit
+)
+
+#testing the model in the holdout sample 
+lm_pred <-predict(lm_mod, holdout, na.action=na.pass)
+
+#test the accuracy of predictions by calculating the correlation 
+cor.test(lm_pred, holdout$HEALTH)
+```
+
+# Running the elastic model 
+```{r}
+elastic_mod <- train(
+ HEALTH ~ ., 
+ mod_dat, 
+ method="glmnet",
+ preProcess=c("center", "scale", "zv", "medianImpute"), 
+ trControl= trainControl(method="cv", number = 10, verboseIter = T), 
+ na.action = na.omit
+)
+
+#testing the model on the holdout data 
+elastic_pred <-predict(elastic_mod, holdout, na.action=na.pass)
+
+#testing the correlation between the elastic model predictions and the actual outcome variables 
+cor.test(elastic_pred, holdout$HEALTH)
+```
+
+# Running the Support Vector Regression Model using 
+```{r}
+svr_mod <- train(
+ HEALTH ~ ., 
+ mod_dat, 
+ method="svmLinear",
+ preProcess=c("center", "scale", "zv", "medianImpute"), 
+ trControl= trainControl(method="cv", number = 10, verboseIter = T), 
+ na.action = na.omit
+)
+
+#testing the model on the holdout data 
+svr_pred <-predict(svr_mod, holdout, na.action=na.pass)
+
+#testing the correlation between the elastic model predictions and the actual outcome variables 
+cor.test(svr_pred, holdout$HEALTH)
+```
+
+# Running the extreme gradient boosted regression
+
+```{r}
+egb_mod <- train(
+ HEALTH ~ ., 
+ mod_dat, 
+ method="xgbTree",
+ preProcess=c("center", "scale", "zv", "medianImpute"), 
+ trControl= trainControl(method="cv", number = 10, verboseIter = T), 
+ na.action = na.omit
+)
+
+#testing the model on the holdout data 
+egb_pred <-predict(egb_mod, holdout, na.action=na.pass)
+
+#testing the correlation between the elastic model predictions and the actual outcome variables 
+cor.test(egb_pred, holdout$HEALTH)
+```
+
+# Comparing the models side by side 
+```{r}
+summary(resamples(list("Linear Regression" = lm_mod, "Elastic Net" = elastic_mod, "Support Vector Regression"=svr_mod, "Extreme Gradient Boosted"=egb_mod)))
+```
+
