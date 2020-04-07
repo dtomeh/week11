@@ -20,10 +20,21 @@ library(xgboost)
 ```
 
 # Data Import and Cleaning
+
+* Using read_sav to import the .sav spss file into r as a file readable by r. 
+* as_tibble converts the week_11 data to a tibble (everything missing is automatically marked as NA)
+* Selecting the HEALTH variable and the 10 Big5 items from the larger dataset as required to build the model
+* filter step 1 removes all rows that are entirely NAs with no actual values
+* filter step 2 removes all rows that have a HEALTH value but have all NAs for the predictors (Big 5)
+* filter step 3 removes all rows that do not have a predictor variable (HEALTH) (we have to filter these out otherwise it is not possible to do median imputation and use na.pass, we would have to pair median imputation with na.omit allowing for pairwise deletion which would leave us with a very small dataset)
+* Finally, the values are converted to numeric, to allow us to use them in the modeling
 ```{r}
 week11 <- read_sav("../data/GSS2006.sav")
 week11_tbl <-as_tibble(week11) %>% 
   select(HEALTH, BIG5A1, BIG5B1, BIG5C1, BIG5D1, BIG5E1, BIG5A2, BIG5B2, BIG5C2, BIG5D2, BIG5E2) %>%
+  filter(rowSums(is.na(.[,1:11]))!=11)  %>%
+  filter(rowSums(is.na(.[,2:11]))!=10) %>%
+  filter(is.na(HEALTH)==FALSE) %>%
   mutate(HEALTH=as.numeric(HEALTH),
          BIG5A1=as.numeric(BIG5A1), 
         BIG5B1=as.numeric(BIG5B1),
@@ -44,21 +55,19 @@ set.seed(2020)
 rows <- sample(nrow(week11_tbl))
 shuffled <- week11_tbl[rows,]
 holdout <- shuffled[1:250,]
-mod_dat <- shuffled[251:4510,]
+mod_dat <- shuffled[(nrow(holdout)+1):nrow(shuffled),]
+```
 
+# Running Model 1, the simple linear regression model with number of folds k=10
 
-#Running Model 1, the simple linear regression model with number of folds k=10
-
-
-#### THIS IS WRONG. SUPPOSED TO BE na.pass but im getting an error so i dunno what to do here.
-
+```{r}
 lm_mod <- train(
  HEALTH ~ ., 
  mod_dat, 
  method="lm",
  preProcess=c("center", "scale", "zv", "medianImpute"), 
- trControl= trainControl(method="cv", number = 10, verboseIter = T), 
- na.action = na.omit
+ trControl= trainControl(method="cv", number = 10, verboseIter = T),
+ na.action = na.pass
 )
 
 #testing the model in the holdout sample 
@@ -68,7 +77,12 @@ lm_pred <-predict(lm_mod, holdout, na.action=na.pass)
 cor.test(lm_pred, holdout$HEALTH)
 ```
 
-# Running the elastic model 
+The correlation between the predicted values for HEALTH and the actual values of HEALTH in the holdout sample is `r cor.test(lm_pred, holdout$HEALTH)$estimate` and the p value is `r cor.test(lm_pred, holdout$HEALTH)$pvalue`
+
+The cross validation model reports statistics of `r lm_mod$results`.
+
+# Running the elastic net model 
+
 ```{r}
 elastic_mod <- train(
  HEALTH ~ ., 
@@ -76,7 +90,7 @@ elastic_mod <- train(
  method="glmnet",
  preProcess=c("center", "scale", "zv", "medianImpute"), 
  trControl= trainControl(method="cv", number = 10, verboseIter = T), 
- na.action = na.omit
+ na.action = na.pass
 )
 
 #testing the model on the holdout data 
@@ -85,8 +99,24 @@ elastic_pred <-predict(elastic_mod, holdout, na.action=na.pass)
 #testing the correlation between the elastic model predictions and the actual outcome variables 
 cor.test(elastic_pred, holdout$HEALTH)
 ```
+The correlation between the predicted values for HEALTH and the actual values of HEALTH in the holdout sample is `r cor.test(elastic_pred, holdout$HEALTH)$estimate` and the p value is `r cor.test(elastic_pred, holdout$HEALTH)$pvalue`
 
-# Running the Support Vector Regression Model using 
+This correlation is smaller than the one for the lm model.
+
+The tuning parameters that worked best for the model are `r elastic_mod$bestTune`. Since neither of the values are 1, that means that the model is a blend of LASSO and Ridge regression. The alpha value is larger than the lambda value, indicating the weighting of the model more closely to a Ridge Regression Model. The lambda value, which is the tuning parameter of the LASSO model, is quite a bit smaller than the alpha.
+
+
+The best alpha value was: alpha =0.55 
+The best lambda value is: lambda =0.0002180219 
+The RMSE of the model with the best Tuning parameters: RMSE = 0.8266527 
+The MAE of the model with the best Tuning parameters: MAE = 0.02844392 
+The Rsquared of the model with the best Tuning parameters: Rsquared =0.6296726
+
+Comparing this model (with the best tuning parameters) and the lm model above, we see that the RMSE is quite similar (.827 and .826 respectively). The R squared values are .028 for the elastic net and .030 for the lm model, and the MAE is .630 for the elastic net model and .628 for the lm model. A smaller RMSE is preferred which would technically favor the linear model. A larger R squared value indicates smaller differences between predicted and actual values and is prefered. This technically points to the elastic net model. Finally, the MAE for the elastic model is .630 and for the lm model is .628. We expect this to be similar to the RMSE and a smaller value is preferred, again indicating the lm model. However; the differences are so small they may not be meaningful. 
+
+# Running the Support Vector Regression Model using svmLinear
+
+
 ```{r}
 svr_mod <- train(
  HEALTH ~ ., 
@@ -94,7 +124,7 @@ svr_mod <- train(
  method="svmLinear",
  preProcess=c("center", "scale", "zv", "medianImpute"), 
  trControl= trainControl(method="cv", number = 10, verboseIter = T), 
- na.action = na.omit
+ na.action = na.pass
 )
 
 #testing the model on the holdout data 
@@ -103,8 +133,16 @@ svr_pred <-predict(svr_mod, holdout, na.action=na.pass)
 #testing the correlation between the elastic model predictions and the actual outcome variables 
 cor.test(svr_pred, holdout$HEALTH)
 ```
+The correlation between the predicted values for HEALTH and the actual values of HEALTH in the holdout sample is `r cor.test(svr_pred, holdout$HEALTH)$estimate` and the p value is `r cor.test(svr_pred, holdout$HEALTH)$pvalue`
+This correlation is smaller than the one for the elastic net model (which is smaller than the lm).
 
-# Running the extreme gradient boosted regression
+The cross validation model reports statistics of `r svr_mod$results`.
+
+Comparing the elastic net model (with the best tuning parameters) and the current Support vector Regression model, we see that the RMSE is quite similar (.827 and .829 respectively). The R squared values are .028 for the elastic net and .026 for the SVR model, and the MAE is .630 for the elastic net model and .604 for the SVRS model. A smaller RMSE is preferred which would technically favor the elastic net model. A larger R squared value indicates smaller differences between predicted and actual values and is prefered. This technically points to the elastic net model as well. Finally, the MAE for the elastic model is .630 and for the SVR model is .603. We expect this to be similar to the RMSE and a smaller value is preferred, but this time indicates the SVR model. The results here tend to indicate that the SVR model does a worse job than the elstic net model. Again; however, the differences are small.  
+
+# Running the extreme gradient boosted regression using xgbTree
+
+
 
 ```{r}
 egb_mod <- train(
@@ -113,7 +151,7 @@ egb_mod <- train(
  method="xgbTree",
  preProcess=c("center", "scale", "zv", "medianImpute"), 
  trControl= trainControl(method="cv", number = 10, verboseIter = T), 
- na.action = na.omit
+ na.action = na.pass
 )
 
 #testing the model on the holdout data 
@@ -122,9 +160,57 @@ egb_pred <-predict(egb_mod, holdout, na.action=na.pass)
 #testing the correlation between the elastic model predictions and the actual outcome variables 
 cor.test(egb_pred, holdout$HEALTH)
 ```
+The correlation between the predicted values for HEALTH and the actual values of HEALTH in the holdout sample is `r cor.test(egb_pred, holdout$HEALTH)$estimate` and the p value is `r cor.test(egb_pred, holdout$HEALTH)$pvalue`
+This correlation is smaller than the SVR model (which is smaller than the elastic and lm models).
+
+
+The best tune for the EGB model suggested by r is `r egb_mod$bestTune`. 
+
+The RMSE of the model with the best Tuning parameters: RMSE = 0.8266710 
+The MAE of the model with the best Tuning parameters: MAE =  0.6177712
+The Rsquared of the model with the best Tuning parameters: Rsquared =0.03009112 
+
+Comparing the SVr and the current Extreme Gradient Boost model (best tune values), we see that the RMSE is quite similar (.829 and .825 respectively). The R squared values are .026 for the SVR and .034 for the EGB model, and the MAE is .604 for the elastic net model and .617 for the SVRS model. A smaller RMSE is preferred which would technically favor the EGB model. A larger R squared value indicates smaller differences between predicted and actual values and is prefered. This technically points to the EGB as well. Finally, the MAE for the SVR is .630 and for the EGB model is .603. We expect this to be similar to the RMSE and a smaller value is preferred, but this time indicates the SVR model. The results here tend to indicate that the SVR model does a worse job than the EGB model. Again; however, the differences are small. This is the first model which all three metrics seem to favor one model over the other, indicating the models are improving as we go on.   
 
 # Comparing the models side by side 
+
+## Tables
 ```{r}
 summary(resamples(list("Linear Regression" = lm_mod, "Elastic Net" = elastic_mod, "Support Vector Regression"=svr_mod, "Extreme Gradient Boosted"=egb_mod)))
 ```
 
+## Plots 
+
+### Rsquared plot 
+```{r}
+dotplot(resamples(list("Linear Regression" = lm_mod, "Elastic Net" = elastic_mod, "Support Vector Regression"=svr_mod, "Extreme Gradient Boosted"=egb_mod)), metric = "Rsquared")
+```
+
+### RMSE Plot
+```{r}
+dotplot(resamples(list("Linear Regression" = lm_mod, "Elastic Net" = elastic_mod, "Support Vector Regression"=svr_mod, "Extreme Gradient Boosted"=egb_mod)), metric = "RMSE")
+```
+
+### MAE 
+
+```{r}
+dotplot(resamples(list("Linear Regression" = lm_mod, "Elastic Net" = elastic_mod, "Support Vector Regression"=svr_mod, "Extreme Gradient Boosted"=egb_mod)), metric = "MAE")
+```
+### ROC
+
+```{r}
+caTools::colAUC(lm_pred, holdout$HEALTH, plotROC = TRUE)
+caTools::colAUC(elastic_pred, holdout$HEALTH, plotROC = TRUE)
+caTools::colAUC(svr_pred, holdout$HEALTH, plotROC = TRUE)
+caTools::colAUC(egb_pred, holdout$HEALTH, plotROC = TRUE)
+```
+
+The following comparison is based on the tables and plots above. 
+The models created in this project actually are very similar. Based on summary statistics, we find that the model with the smallest mean RMSE (which is preferred) is the Extreme Gradient Boosted Model with RMSE = 0.825, followed by the elastic net model(.826), the lm model (.826), and the SVR model(.829), so the difference between the models is very small. Based on the dotplot for RMSE, we can see that all four of the confidence intervals overlap, and it looks as though the other three CIs actually completely overlap with the CI for the SVR. That also means that the CI for the SVR model is wider than those for the other models. 
+The model with the smallest mean MAE (again smaller is preferred) is the Support Vector regression with MAE = 0.604, followed by the EGB (.617), Elastic net (.623), and linear model (.628). Again, according to the dotplot, all four of the confidence intervals overlap quite a bit, and again the SVR CI is the widest. 
+Finally the model with the largest mean Rsquared (larger is preferred) is the extreme Gradient Boost with Rsquared = 0.034, follwed by the linear model(.030), the elastic net model (.029), and then the SVR model (.026). All four confidence intervals also overlap for the Rsquared.
+The correlation between the predicted values of HEALTH in the hold outdata correlated highest with the actual HEALTH values in the holdout data for the Linear model (.275), followed by the elastic net model(.268), followed by the SVR model(.258), followed by the EGB model(.233). These correlations are quite similar as well. 
+The ROC curves are all very similar and land just above the diagonal that would indicate models not much better than random guessing, indicating that none of the four models is really a great predictor of HEALTH. 
+
+Ultimately  based on the discussion above, I choose the Extreme Gradient Boost Regression Model. It has the lowest RMSE and the second lowest MEA. It also has the highest Rsquared value. By choosing this model, I'm giving up a little bit of correlation, as it has the lowest correlation between predicted and actual HEALTH values (the highest is .275, and this model has a correlation of .233 - a difference of .042).
+That being said, all of the models are not great. The statistic values are so similar that there isn't really a model that clearly predicts better than the others. 
